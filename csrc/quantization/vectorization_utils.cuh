@@ -16,10 +16,10 @@ struct DefaultVecOp {
   }
 };
 
-template <int VEC_SIZE, typename InT, typename OutT, typename VecOp,
+template <size_t VEC_SIZE, typename InT, typename OutT, typename VecOp,
           typename ScaOp>
 __device__ inline void vectorize_with_alignment(
-    const InT* in, OutT* out, int len, int tid, int stride,
+    const InT* __restrict__ in, OutT* __restrict__ out, int len, int tid, int stride,
     VecOp&& vec_op,       // vec_n_t<InT,16> -> vec_n_t<OutT,16>
     ScaOp&& scalar_op) {  // InT -> OutT
   static_assert(VEC_SIZE > 0 && (VEC_SIZE & (VEC_SIZE - 1)) == 0,
@@ -36,13 +36,14 @@ __device__ inline void vectorize_with_alignment(
 
     using vin_t = vec_n_t<InT, VEC_SIZE>;
     using vout_t = vec_n_t<OutT, VEC_SIZE>;
-    auto* v_in = reinterpret_cast<const vin_t*>(in);
-    auto* v_out = reinterpret_cast<vout_t*>(out);
+    const vin_t* __restrict__ v_in = reinterpret_cast<const vin_t*>(in);
+    auto* __restrict__ v_out = reinterpret_cast<vout_t*>(out);
 
     for (int i = tid; i < num_vec; i += stride) {
-      vout_t tmp;
-      vec_op(tmp, v_in[i]);
-      v_out[i] = tmp;
+      vin_t inp = v_in[i];
+      vout_t out;
+      vec_op(out, inp);
+      v_out[i] = out;
     }
     return;
   }
@@ -82,7 +83,7 @@ __device__ inline void vectorize_with_alignment(
   }
 }
 
-template <int VEC_SIZE, typename InT, typename OutT, typename ScaOp>
+template <size_t VEC_SIZE, typename InT, typename OutT, typename ScaOp>
 __device__ __forceinline__ void vectorize_with_alignment(const InT* in,
                                                          OutT* out, int len,
                                                          int tid, int stride,

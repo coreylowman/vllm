@@ -312,7 +312,7 @@ __global__ void reshape_and_cache_flash_kernel(
 
   float k_scale_val = (kv_dt == Fp8KVCacheDataType::kAuto) ? 0.f : *k_scale;
   float v_scale_val = (kv_dt == Fp8KVCacheDataType::kAuto) ? 0.f : *v_scale;
-  constexpr int VEC_SIZE = (sizeof(scalar_t) == 2) ? 8 : 4;
+  constexpr size_t VEC_SIZE = (sizeof(scalar_t) == 2) ? 8 : 4;
   CopyWithScaleOp<cache_t, scalar_t, kv_dt> k_op{k_scale_val};
   CopyWithScaleOp<cache_t, scalar_t, kv_dt> v_op{v_scale_val};
   if (is_contiguous_heads) {
