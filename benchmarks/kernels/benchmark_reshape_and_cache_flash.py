@@ -95,13 +95,14 @@ def run_benchmark(
     lat = run_cuda_benchmark(num_iters)
 
     # free tensors to mitigate OOM when sweeping
-    del key, value, key_cache, value_cache, slot_mapping
+    del key, value, key_cache, value_cache, slot_mapping, key_caches, value_caches
     torch.cuda.empty_cache()
 
     return lat
 
 
 def main(args):
+    dtype = STR_DTYPE_TO_TORCH_DTYPE[args.dtype]
     rows = []
     for layout in ["NHD", "HND"]:
         for exp in range(1, 17):
@@ -112,15 +113,19 @@ def main(args):
                 head_size=args.head_size,
                 block_size=args.block_size,
                 num_blocks=args.num_blocks,
-                dtype=STR_DTYPE_TO_TORCH_DTYPE[args.dtype],
+                dtype=dtype,
                 kv_cache_dtype=args.kv_cache_dtype,
                 kv_cache_layout=layout,
                 num_iters=args.iters,
                 device="cuda",
             )
-            rows.append([n_tok, layout, f"{lat * 1e6:.3f}"])
+            bytes = n_tok * args.num_heads * args.head_size * dtype.itemsize
+            gb = 1e-9 * bytes
+            throughput = gb / lat
+            rows.append([n_tok, layout, lat * 1e6, throughput])
+            print(rows[-1])
 
-    print(tabulate(rows, headers=["num_tokens", "layout", "latency (µs)"]))
+    print(tabulate(rows, headers=["num_tokens", "layout", "latency (µs)", "throughput (gb / s)"]))
 
 
 if __name__ == "__main__":
