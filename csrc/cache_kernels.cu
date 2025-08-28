@@ -320,10 +320,8 @@ __global__ void reshape_and_cache_flash_kernel(
     // kv cache: [num_blocks, block_size, num_heads, head_size]
     vectorize_with_alignment<VEC_SIZE>(key_src, key_dst, n_elems, threadIdx.x,
                                        blockDim.x, k_op);
-
     vectorize_with_alignment<VEC_SIZE>(value_src, value_dst, n_elems,
                                        threadIdx.x, blockDim.x, v_op);
-
   } else {
     // HND layout: heads are strided, but each head_size segment is contiguous
     // kv cache: [num_blocks, num_heads, block_size, head_size]
@@ -344,7 +342,6 @@ __global__ void reshape_and_cache_flash_kernel(
       // copy
       vectorize_with_alignment<VEC_SIZE>(k_src_h, k_dst_h, head_size, lane, 32,
                                          k_op);
-
       vectorize_with_alignment<VEC_SIZE>(v_src_h, v_dst_h, head_size, lane, 32,
                                          v_op);
     }
@@ -486,8 +483,25 @@ void reshape_and_cache_flash(
   int64_t head_stride = key_cache.stride(2);
   TORCH_CHECK(key_cache.stride(0) == value_cache.stride(0));
 
+  int block_dim;
+  if (head_stride == head_size) {
+    if (num_tokens < 512) {
+      block_dim = 256;
+    } else {
+      block_dim = 512;
+    }
+  } else {
+    if (num_tokens < 512) {
+      block_dim = 512;
+    } else if (num_tokens < 2048) {
+      block_dim = 256;
+    } else {
+      block_dim = 128;
+    }
+  }
+
   dim3 grid(num_tokens);
-  dim3 block(std::min(num_heads * head_size, 512));
+  dim3 block(std::min(num_heads * head_size, block_dim));
   const at::cuda::OptionalCUDAGuard device_guard(device_of(key));
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 

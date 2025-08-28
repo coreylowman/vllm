@@ -71,9 +71,10 @@ __device__ inline void vectorize_with_alignment(
 
   // 2. vectorize the main part
   for (int i = tid; i < num_vec; i += stride) {
-    vout_t tmp;
-    vec_op(tmp, v_in[i]);
-    v_out[i] = tmp;
+    vin_t inp = v_in[i];
+    vout_t out;
+    vec_op(out, inp);
+    v_out[i] = out;
   }
 
   // 3. handle the tail
@@ -126,7 +127,8 @@ __device__ inline void vectorize_read_with_alignment(const InT* in, int len,
     auto* v_in = reinterpret_cast<const vin_t*>(in);
 
     for (int i = tid; i < num_vec; i += stride) {
-      vec_op(v_in[i]);
+      vin_t inp = v_in[i];
+      vec_op(inp);
     }
     return;
   }
@@ -151,7 +153,8 @@ __device__ inline void vectorize_read_with_alignment(const InT* in, int len,
 
   // 2. vectorized traversal of the main aligned region.
   for (int i = tid; i < num_vec; i += stride) {
-    vec_op(v_in[i]);
+    vin_t inp = v_in[i];
+    vec_op(inp);
   }
 
   // 3. handle remaining tail elements.
