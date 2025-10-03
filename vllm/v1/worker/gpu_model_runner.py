@@ -221,6 +221,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         self.dcp_world_size = self.parallel_config.decode_context_parallel_size
         self.max_num_tokens = scheduler_config.max_num_batched_tokens
         self.max_num_reqs = scheduler_config.max_num_seqs
+        self.compute_nans_in_logits = envs.VLLM_COMPUTE_NANS_IN_LOGITS
 
         # Broadcast PP output for external_launcher (torchrun)
         # to make sure we are synced across pp ranks
@@ -733,16 +734,17 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             return
 
         # Find the number of accepted tokens for each sequence.
-        num_accepted_tokens = (torch.cat(
-            [
-                output_token_ids,
-                torch.full((output_token_ids.size(0), 1),
-                           -1,
-                           device=output_token_ids.device),
-            ],
-            dim=1) == -1).int().argmax(-1).cpu().numpy()
-        for i, num_tokens in enumerate(num_accepted_tokens):
-            self.input_batch.num_accepted_tokens_cpu[i] = num_tokens
+        mask = output_token_ids == -1
+        num_accepted_tokens = torch.where(
+            mask.any(dim=1),
+            mask.int().argmax(dim=1),
+            output_token_ids.size(1),
+        )
+        self.input_batch.num_accepted_tokens_cpu[:num_accepted_tokens.
+                                                 size(0)].copy_(
+                                                     num_accepted_tokens,
+                                                     non_blocking=True)
+        self.input_batch.num_accepted_tokens_event.record()
 
     def _init_mrope_positions(self, req_state: CachedRequestState):
         image_grid_thw = []
@@ -1166,9 +1168,10 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             self.input_batch.num_computed_tokens_cpu_tensor[:num_reqs])
         spec_decode_common_attn_metadata = None
         if use_spec_decode:
-            self.num_accepted_tokens.np[:num_reqs] = (
+            self.input_batch.num_accepted_tokens_event.synchronize()
+            self.num_accepted_tokens.cpu[:num_reqs].copy_(
                 self.input_batch.num_accepted_tokens_cpu[:num_reqs])
-            self.num_accepted_tokens.np[num_reqs:].fill(1)
+            self.num_accepted_tokens.cpu[num_reqs:].fill_(1)
             self.num_accepted_tokens.copy_to_gpu()
 
         # Prepare the attention metadata for each KV cache group and make layers
@@ -2148,7 +2151,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             list[int],
     ]:
         num_nans_in_logits = {}
-        if envs.VLLM_COMPUTE_NANS_IN_LOGITS:
+        if self.compute_nans_in_logits:
             num_nans_in_logits = self._get_nans_in_logits(logits)
 
         discard_sampled_tokens_req_indices = \
@@ -2768,6 +2771,8 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 self.vllm_config)
             compilation_counter.dynamo_as_is_count += 1
             self.model.compile(fullgraph=True, backend=backend)
+            if hasattr(self, "drafter"):
+                self.drafter.model.compile(fullgraph=True, backend=backend)
             return
         # for other compilation levels, cudagraph behavior is controlled by
         # CudagraphWraper and CudagraphDispatcher of vllm.
@@ -2778,13 +2783,28 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             self.model = CUDAGraphWrapper(self.model,
                                           self.vllm_config,
                                           runtime_mode=CUDAGraphMode.FULL)
+            if hasattr(self, "drafter"):
+                self.drafter.model = CUDAGraphWrapper(
+                    self.drafter.model,
+                    self.vllm_config,
+                    runtime_mode=CUDAGraphMode.FULL)
         elif self.parallel_config.enable_dbo:
             if self.compilation_config.cudagraph_mode.has_full_cudagraphs():
                 self.model = UBatchWrapper(self.model, self.vllm_config,
                                            CUDAGraphMode.FULL, self.device)
+                if hasattr(self, "drafter"):
+                    self.drafter.model = UBatchWrapper(self.drafter.model,
+                                                       self.vllm_config,
+                                                       CUDAGraphMode.FULL,
+                                                       self.device)
             else:
                 self.model = UBatchWrapper(self.model, self.vllm_config,
                                            CUDAGraphMode.NONE, self.device)
+                if hasattr(self, "drafter"):
+                    self.drafter.model = UBatchWrapper(self.drafter.model,
+                                                       self.vllm_config,
+                                                       CUDAGraphMode.NONE,
+                                                       self.device)
 
     def reload_weights(self) -> None:
         assert getattr(self, "model", None) is not None, \
@@ -2829,8 +2849,9 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 continue
 
             num_prompt_tokens = len(request.prompt_token_ids)
-            prompt_token_ids = torch.tensor(request.prompt_token_ids).to(
-                self.device, non_blocking=True)
+            prompt_token_ids = torch.tensor(request.prompt_token_ids,
+                                            pin_memory=True).to(
+                                                self.device, non_blocking=True)
 
             # Set up target LogprobsTensors object.
             logprobs_tensors = in_progress_dict.get(req_id)

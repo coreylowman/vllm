@@ -50,14 +50,22 @@ class LogprobsTensors(NamedTuple):
                   num_tokens_per_position: int) -> "LogprobsTensors":
         """Create empty LogprobsTensors on CPU."""
 
+        from vllm.utils import is_pin_memory_available
+
+        pin_memory = is_pin_memory_available()
+
         logprob_token_ids = torch.empty(
             (num_positions, num_tokens_per_position),
             dtype=torch.int32,
-            device="cpu")
-        logprobs = torch.empty_like(logprob_token_ids, dtype=torch.float32)
+            device="cpu",
+            pin_memory=pin_memory)
+        logprobs = torch.empty_like(logprob_token_ids,
+                                    dtype=torch.float32,
+                                    pin_memory=pin_memory)
         selected_token_ranks = torch.empty(num_positions,
                                            dtype=torch.int32,
-                                           device="cpu")
+                                           device="cpu",
+                                           pin_memory=pin_memory)
         return LogprobsTensors(
             logprob_token_ids=logprob_token_ids,
             logprobs=logprobs,

@@ -66,6 +66,10 @@ class Sampler(nn.Module):
         self.pin_memory = is_pin_memory_available()
         self.logprobs_mode = logprobs_mode
 
+    # @torch.compile(dynamic=True, options={
+    #     "epilogue_fusion": True,
+    #     "max_autotune": True,
+    # })
     def forward(
         self,
         logits: torch.Tensor,

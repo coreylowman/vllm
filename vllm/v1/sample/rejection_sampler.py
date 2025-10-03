@@ -43,6 +43,10 @@ class RejectionSampler(nn.Module):
         output tokens = accepted tokens + recovered tokens + bonus tokens
     """
 
+    # @torch.compile(dynamic=True, options={
+    #     "epilogue_fusion": True,
+    #     "max_autotune": True,
+    # })
     def forward(
         self,
         metadata: SpecDecodeMetadata,
@@ -186,7 +190,6 @@ def rejection_sample(
             bonus_token_ids,
             is_greedy,
             max_spec_len,
-            num_warps=1,
         )
         if sampling_metadata.all_greedy:
             return output_token_ids
@@ -214,21 +217,19 @@ def rejection_sample(
     )
 
     # Rejection sampling for random sampling requests.
-    rejection_random_sample_kernel[(batch_size, )](
-        output_token_ids,
-        cu_num_draft_tokens,
-        draft_token_ids,
-        draft_probs,
-        target_probs,
-        bonus_token_ids,
-        recovered_token_ids,
-        uniform_probs,
-        is_greedy,
-        max_spec_len,
-        vocab_size,
-        NO_DRAFT_PROBS=draft_probs is None,
-        num_warps=1,
-    )
+    rejection_random_sample_kernel[(batch_size, )](output_token_ids,
+                                                   cu_num_draft_tokens,
+                                                   draft_token_ids,
+                                                   draft_probs,
+                                                   target_probs,
+                                                   bonus_token_ids,
+                                                   recovered_token_ids,
+                                                   uniform_probs,
+                                                   is_greedy,
+                                                   max_spec_len,
+                                                   vocab_size,
+                                                   NO_DRAFT_PROBS=draft_probs
+                                                   is None)
     return output_token_ids
 
 
@@ -328,8 +329,7 @@ def expand_batch_to_tokens(
         cu_num_tokens,
         replace_from,
         replace_to,
-        MAX_NUM_TOKENS=MAX_SPEC_LEN,  # To avoid recompilation.
-        num_warps=1,
+        MAX_NUM_TOKENS=MAX_SPEC_LEN,  # To avoid recompilation
     )
     return expanded_x
 

@@ -93,6 +93,23 @@ class SymmMemCommunicator:
         self.force_multimem = force_multimem
         self.disabled = False
 
+        # Determine which algorithm to use
+        self.use_multimem = False
+        if self.force_multimem is not None:
+            # Test override: use forced setting
+            self.use_multimem = self.force_multimem
+        else:
+            # Normal logic: use multimem for supported world sizes
+            self.use_multimem = self.world_size in self._WORLD_SIZES_MULTIMEM[
+                self.device_capability]
+
+        if self.use_multimem:
+            logger.info("SymmMemCommunicator: using multimem_all_reduce_")
+            self.all_reduce_op = torch.ops.symm_mem.multimem_all_reduce_
+        else:
+            logger.info("SymmMemCommunicator: using two_shot_all_reduce_")
+            self.all_reduce_op = torch.ops.symm_mem.two_shot_all_reduce_
+
     def should_use_symm_mem(self, inp: torch.Tensor):
         if self.disabled:
             return False
@@ -112,25 +129,9 @@ class SymmMemCommunicator:
             return None
         if out is None:
             out = torch.empty_like(inp)
-        self.buffer[:inp.numel()].copy_(inp.view(-1))
 
-        # Determine which algorithm to use
-        use_multimem = False
-        if self.force_multimem is not None:
-            # Test override: use forced setting
-            use_multimem = self.force_multimem
-        else:
-            # Normal logic: use multimem for supported world sizes
-            use_multimem = self.world_size in self._WORLD_SIZES_MULTIMEM[
-                self.device_capability]
-
-        if use_multimem:
-            torch.ops.symm_mem.multimem_all_reduce_(self.buffer[:inp.numel()],
-                                                    "sum",
-                                                    self.group.group_name)
-        else:
-            torch.ops.symm_mem.two_shot_all_reduce_(self.buffer[:inp.numel()],
-                                                    "sum",
-                                                    self.group.group_name)
-        out.copy_(self.buffer[:inp.numel()].view(out.shape))
+        buf = self.buffer[:inp.numel()]
+        buf.copy_(inp.view(-1))
+        self.all_reduce_op(buf, "sum", self.group.group_name)
+        out.copy_(buf.view(out.shape))
         return out

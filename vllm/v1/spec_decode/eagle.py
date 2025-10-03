@@ -338,14 +338,16 @@ class EagleProposer:
                 exceeds_max_model_len = positions[0] >= self.max_model_len
                 # Mask out the position ids that exceed the max model length.
                 # Otherwise, we may get out-of-range error in RoPE.
-                clamped_positions = torch.where\
-                    (exceeds_max_model_len.unsqueeze(0), \
-                     torch.zeros_like(positions), positions)
+                clamped_positions = torch.where(exceeds_max_model_len, 0,
+                                                positions)
             else:
                 positions += 1
                 exceeds_max_model_len = positions >= self.max_model_len
                 clamped_positions = torch.where(exceeds_max_model_len, 0,
                                                 positions)
+
+            common_attn_metadata.seq_lens.masked_fill_(exceeds_max_model_len,
+                                                       1)
 
             # Increment the sequence lengths.
             common_attn_metadata.seq_lens += 1
@@ -353,29 +355,17 @@ class EagleProposer:
             # For the requests that exceed the max model length, we set the
             # sequence length to 1 to minimize their overheads in attention.
 
-            common_attn_metadata.seq_lens.masked_fill_(exceeds_max_model_len,
-                                                       1)
-
             common_attn_metadata.num_computed_tokens_cpu = \
                 common_attn_metadata.seq_lens_cpu - 1
 
             # Compute the slot mapping.
-            if self.uses_mrope:
-                # all dimensions of positions are the same
-                block_numbers = clamped_positions[0] // self.block_size
-            else:
-                block_numbers = clamped_positions // self.block_size
+            block_numbers = clamped_positions // self.block_size
             block_ids = common_attn_metadata.block_table_tensor.gather(
                 dim=1, index=block_numbers.view(-1, 1))
             block_ids = block_ids.view(-1)
-            if self.uses_mrope:
-                common_attn_metadata.slot_mapping = (
-                    block_ids * self.block_size +
-                    clamped_positions[0] % self.block_size)
-            else:
-                common_attn_metadata.slot_mapping = (
-                    block_ids * self.block_size +
-                    clamped_positions % self.block_size)
+            common_attn_metadata.slot_mapping = (
+                block_ids * self.block_size +
+                clamped_positions % self.block_size)
             # Mask out the slot mappings that exceed the max model length.
             # Otherwise, the KV cache will be inadvertently updated with the
             # padding tokens.
